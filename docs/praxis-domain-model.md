@@ -1,43 +1,75 @@
 ---
-title: Domain Model & OOP Architecture Specification — v1.0.0 Draft (Archived)
-description: Initial domain model specification draft for Praxis, preserved for historical and comparative reference.
-version: 1.0.0
-status: Superseded / Archive
+title: Domain Model & OOP Architecture Specification
+description: Canonical domain model, aggregates, entities, value objects, behavioral contracts, and use cases for Praxis.
+version: 1.0.1
+status: Approved Domain Baseline
 date: 2026-09-24
 tags:
   - domain-model
   - ddd
-  - archive
+  - clean-architecture
+  - oop
 ---
 
-# Domain Model & OOP Architecture Specification — v1.0.0 Draft (Archived)
+# Domain Model & OOP Architecture Specification
 
-> [!WARNING]
-> **Superseded Specification**: This document is an initial draft preserved for historical reference and auditability. The canonical, active specification is maintained in [`praxis-domain-model-v1.0.1.md`](praxis-domain-model-v1.0.1.md).
+> Canonical Domain Model, Object-Oriented Design, and Clean Architecture Specification for **Praxis**.
 
 | Document Attribute | Specification |
 | :--- | :--- |
-| **Document Version** | `1.0.0` |
-| **Status** | Superseded / Historical Archive |
-| **Date** | 2026-09-24 |
-| **Canonical Baseline** | [`praxis-domain-model-v1.0.1.md`](praxis-domain-model-v1.0.1.md) |
-| **Prerequisite SRS** | [`praxis-srs.md`](praxis-srs.md) |
+| **Document Version** | `1.0.1` |
+| **Status** | Approved Domain Baseline |
+| **Last Updated** | 2026-09-24 |
+| **SRS Baseline** | [`praxis-srs-v1.0.2.md`](praxis-srs-v1.0.2.md) |
+| **Previous Revision** | [`praxis-domain-model.md`](praxis-domain-model.md) (`v1.0.0`) |
 
 ---
 
-## 1. Domain Topology & Conceptual Overview
+> [!NOTE]
+> ### Summary of Changes from v1.0.0
+> 1. **Snapshot vs. Execution Mutability**: Clarified that `WorkoutSession` contains an immutable `SessionPrescriptionSnapshot` frozen upon initiation, while its execution performance state remains mutable until explicitly finalized (`Completed`, `Partially_Completed`, `Skipped`), at which point the entire session locks.
+> 2. **Unified Prescription Snapshot**: Grouped frozen prescriptions and activities under a single session-level `SessionPrescriptionSnapshot` value object rather than scattering snapshot copies across individual performances.
+> 3. **`Exercise` Promoted to Aggregate Root**: Recognized `Exercise` as an independent Aggregate Root with its own lifecycle, referenced by ID from prescriptions and performances.
+> 4. **`User` Clarified as Ownership Entity**: Modeled `User` as an identity and profile entity, avoiding an oversized aggregate that contains all routines and sessions.
+> 5. **`SessionActivity` & `ActivityPerformance` Entities**: Formally modeled non-set activities (warm-ups, cardio) across both the prescription layer (`SessionActivity`) and execution layer (`ActivityPerformance`).
+> 6. **`DayKind` Cleanup**: Removed `Active Recovery` from `DayKind` (`Workout`, `Rest`, `Unscheduled`). Active recovery is represented as an activity or ad-hoc session.
+> 7. **Phase Progression Model**: Broadened `Phase` from a narrow integer set modifier to a declarative specification supporting prescription overrides over defined week windows.
+> 8. **Single-Active-Routine Invariant Placement**: Transferred the single-active-routine rule from `Routine` aggregate invariant to an Application Policy orchestrated by `ActivateRoutineUseCase`.
+> 9. **Naming & Substitution Clarification**: Renamed to `planned_exercise_id` and `performed_exercise_id`. Established invariant: performance of substituted exercises contributes strictly to the `performed_exercise_id`'s historical log.
+> 10. **Targeted Method Encapsulation**: Refactored `session.record_set(performance_id, set_data)` and `session.remove_set(performance_id, set_id)` to target performances and sets by ID.
+> 11. **Metric Validation on `SetPerformance`**: Added metric type validation enforcing required fields (e.g., reps for weightlifting, duration for timed planks) to prevent nonsensical data combinations.
+> 12. **Effort Scoping**: Scoped effort tracking strictly to optional `RIR` for MVP; deferred RPE.
+> 13. **Milestone Scoping (1RM Deferred)**: Moved 1RM/PR estimation out of the core MVP calculation layer into Milestone 2, keeping MVP focused on factual history, metric-dependent workload, and adherence.
+> 14. **Domain Behavioral Contracts**: Added explicit pre/post-conditions and state transition matrices for each aggregate.
 
-Praxis translates user intent into physical performance and derived analytical insight. The architecture strictly enforces boundaries across three temporal layers:
+---
+
+## 1. Domain Topology & Class Diagram
+
+Praxis enforces strict separation across the three temporal layers (**Prescription**, **Performance**, **Analysis**) while maintaining decoupled aggregate boundaries:
 
 ```mermaid
 classDiagram
     direction TB
 
     class User {
+        <<Entity / Identity>>
         +UserId id
         +ExternalIdentityId external_id
         +UserProfile profile
         +DateTime created_at
+    }
+
+    class Exercise {
+        <<Aggregate Root>>
+        +ExerciseId id
+        +UserId author_id
+        +String name
+        +MuscleGroup category
+        +Equipment equipment
+        +MetricType default_metric
+        +String instructions
+        +update_metadata(name, category, equipment, default_metric, instructions)
     }
 
     class Routine {
@@ -49,9 +81,13 @@ classDiagram
         +DateTime activated_at
         +List~Phase~ phases
         +Map~Weekday, WorkoutDay~ schedule
-        +activate(now: DateTime)
-        +deactivate()
+        +mark_active(now: DateTime)
+        +mark_inactive()
         +get_current_phase(for_date: Date) Phase
+        +configure_workout_day(weekday, label, kind)
+        +add_prescription(weekday, prescription)
+        +remove_prescription(weekday, prescription_id)
+        +reorder_prescriptions(weekday, ordered_ids)
     }
 
     class WorkoutDay {
@@ -68,24 +104,22 @@ classDiagram
         <<Entity>>
         +PrescriptionId id
         +ExerciseId exercise_id
-        +TargetSets target_sets
+        +Int target_sets
         +RepRange rep_range
-        +TargetDuration target_duration
+        +Duration target_duration
         +Weight target_weight
         +Boolean is_unilateral
         +Int order_index
         +String notes
     }
 
-    class Exercise {
-        <<Entity / Reference>>
-        +ExerciseId id
-        +UserId author_id
+    class SessionActivity {
+        <<Entity>>
+        +ActivityId id
         +String name
-        +MuscleGroup category
-        +Equipment equipment
-        +MetricType default_metric
-        +String instructions
+        +String description
+        +Duration target_duration
+        +Int order_index
     }
 
     class WorkoutSession {
@@ -97,414 +131,354 @@ classDiagram
         +SessionStatus status
         +DateTime started_at
         +DateTime finished_at
+        +SessionPrescriptionSnapshot prescription_snapshot
         +List~ExercisePerformance~ exercises
         +List~ActivityPerformance~ activities
         +String notes
-        +record_set(exercise_id, set_perf)
-        +substitute_exercise(original_id, new_id, reason)
-        +finish(policy: CompletionPolicy)
+        +record_set(performance_id, set_data) SetPerformance
+        +remove_set(performance_id, set_id)
+        +substitute_exercise(performance_id, new_exercise_id, reason)
+        +add_ad_hoc_exercise(exercise_id) ExercisePerformance
+        +record_activity(activity_perf_id, actual_duration, actual_dist, notes)
+        +finish(policy: CompletionPolicy) CompletionResult
         +skip(reason: String)
+    }
+
+    class SessionPrescriptionSnapshot {
+        <<Value Object>>
+        +RoutineId routine_id
+        +String routine_name
+        +String phase_name
+        +List~PrescriptionSnapshotItem~ exercise_prescriptions
+        +List~ActivitySnapshotItem~ activities
     }
 
     class ExercisePerformance {
         <<Entity>>
         +ExercisePerformanceId id
-        +ExerciseId prescribed_exercise_id
-        +ExerciseId actual_exercise_id
-        +PrescriptionSnapshot prescription_snapshot
+        +ExerciseId planned_exercise_id
+        +ExerciseId performed_exercise_id
+        +PrescriptionId prescription_item_id
         +List~SetPerformance~ sets
         +SubstitutionContext substitution
         +String notes
+        +append_set(set_data) SetPerformance
+        +remove_set(set_id)
+        +calculate_workload(metric_type) Workload
     }
 
     class SetPerformance {
         <<Entity>>
         +SetPerformanceId id
-        +Int set_number
         +Int actual_reps
         +Weight actual_weight
         +Duration actual_duration
         +RIR reps_in_reserve
-        +RPE perceived_exertion
+        +String notes
+    }
+
+    class ActivityPerformance {
+        <<Entity>>
+        +ActivityPerformanceId id
+        +ActivityId planned_activity_id
+        +String name
+        +Duration actual_duration
+        +Distance actual_distance
+        +Boolean is_completed
         +String notes
     }
 
     User "1" --> "*" Routine : owns
+    User "1" --> "*" WorkoutSession : performs
+    User "1" --> "*" Exercise : authors
+
     Routine "1" *-- "7" WorkoutDay : contains
     WorkoutDay "1" *-- "*" ExercisePrescription : prescribes
-    ExercisePrescription "1" --> "1" Exercise : targets
-    
-    User "1" --> "*" WorkoutSession : performs
+    WorkoutDay "1" *-- "*" SessionActivity : prescribes
+    ExercisePrescription "1" --> "1" Exercise : references
+
+    WorkoutSession "1" *-- "1" SessionPrescriptionSnapshot : freezes
     WorkoutSession "1" *-- "*" ExercisePerformance : tracks
+    WorkoutSession "1" *-- "*" ActivityPerformance : tracks
     ExercisePerformance "1" *-- "*" SetPerformance : logs
-    ExercisePerformance "1" --> "1" Exercise : references
+    ExercisePerformance "1" --> "1" Exercise : performed_as
 ```
 
 ---
 
 ## 2. Classification: Entities vs. Value Objects
 
-To eliminate mutable identity bugs and enforce domain integrity, elements are strictly separated into **Entities** (having unique identity, lifecycle, and mutable state governed by methods) and **Value Objects** (immutable descriptors compared purely by value, with structural validation).
-
 ### 2.1. Value Objects
 
 | Value Object | Structural Fields | Invariants & Validation Rules |
 | :--- | :--- | :--- |
-| `UserId` | `UUID / String` | Non-empty, opaque string representing domain user identity. |
-| `Weekday` | `Enum: Monday .. Sunday` | ISO-8601 weekday integer representation (1–7). |
-| `DayKind` | `Enum: Workout, Rest, Unscheduled` | Categorizes scheduling nature of the calendar day. |
-| `RepRange` | `min_reps: Int, max_reps: Int` | `1 <= min_reps <= max_reps <= 200`. If fixed reps (e.g. 12), `min_reps == max_reps`. |
-| `Weight` | `value: Decimal, unit: Unit (KG, LBS)` | `value >= 0.0`. Provides explicit conversions between KG and LBS. |
-| `Duration` | `seconds: Int` | `seconds >= 0`. Expressed in whole seconds. |
-| `RIR` | `value: Int` | `0 <= value <= 10` (Reps In Reserve). |
-| `RPE` | `value: Decimal` | `1.0 <= value <= 10.0` (Rating of Perceived Exertion). |
-| `Phase` | `name: String, start_week: Int, end_week: Optional[Int], set_modifier: Int` | `start_week >= 1`. If `end_week` is present, `start_week <= end_week`. Governs prescribed set counts. |
-| `PrescriptionSnapshot` | Frozen copy of prescribed sets, reps, weight, duration, cues | Completely immutable value object frozen upon session creation. |
-| `SubstitutionContext` | `original_exercise_id: ExerciseId, reason: String` | Records why an exercise was swapped during live execution. |
+| `UserId` | `UUID / String` | Immutable non-empty opaque string. |
+| `ExerciseId` | `UUID / String` | Unique identifier for canonical exercise movements. |
+| `RoutineId` | `UUID / String` | Unique identifier for routine templates. |
+| `SessionId` | `UUID / String` | Unique identifier for workout sessions. |
+| `Weekday` | `Enum: Monday .. Sunday` | ISO-8601 integer representation (1–7). |
+| `DayKind` | `Enum: Workout, Rest, Unscheduled` | Primary calendar classification. |
+| `MetricType` | `Enum: RepsWeight, Duration, DistanceDuration` | Governs measurement and validation rules. |
+| `RepRange` | `min_reps: Int, max_reps: Int` | `1 <= min_reps <= max_reps <= 200`. For fixed reps, `min_reps == max_reps`. |
+| `Weight` | `value: Decimal, unit: Unit (KG, LBS)` | `value >= 0.0`. Implements lossless `.to_kg()` conversion. |
+| `Duration` | `seconds: Int` | `seconds >= 0`. Whole-second granularity. |
+| `Distance` | `meters: Decimal` | `meters >= 0.0`. |
+| `RIR` | `value: Int` | `0 <= value <= 5` (Reps In Reserve). |
+| `Phase` | `name: String, start_week: Int, end_week: Optional[Int], target_sets_override: Optional[Int]` | `start_week >= 1`. If `end_week` present, `start_week <= end_week`. |
+| `SessionPrescriptionSnapshot` | Frozen copy of prescriptions, activities, and phase metadata | Fully immutable value object materialised at session initiation. |
+| `PrescriptionSnapshotItem` | `prescription_id, exercise_id, exercise_name, target_sets, rep_range, target_duration, target_weight, order_index` | Immutable representation of a single prescribed movement. |
+| `ActivitySnapshotItem` | `activity_id, name, description, target_duration, order_index` | Immutable representation of a prescribed session activity. |
+| `SubstitutionContext` | `original_exercise_id: ExerciseId, reason: String, substituted_at: DateTime` | Immutable audit trail of an on-the-fly exercise change. |
 
-### 2.2. Entities
+### 2.2. Entities & Aggregate Roots
 
-- **`User`**: Root user entity owning preferences and data references.
-- **`Exercise`**: Canonical catalog entry for a physical movement.
-- **`Routine`**: Root aggregate managing weekly schedules and phase definitions.
-- **`WorkoutDay`**: Child entity of `Routine` defining prescriptions for a given weekday.
-- **`ExercisePrescription`**: Child entity of `WorkoutDay` prescribing targets for an exercise.
-- **`WorkoutSession`**: Root aggregate representing a concrete training event.
-- **`ExercisePerformance`**: Child entity of `WorkoutSession` capturing logged work for one exercise.
-- **`SetPerformance`**: Child entity of `ExercisePerformance` capturing an individual set's execution metrics.
+1. **`Exercise` (Aggregate Root)**: Canonical movement definition with name, muscle group, equipment, default metric hint, and instructional cues.
+2. **`Routine` (Aggregate Root)**: Reusable schedule template containing 7 `WorkoutDay` entities and progression `Phase` definitions.
+3. **`WorkoutSession` (Aggregate Root)**: Historical training occurrence containing a frozen prescription snapshot and executing child entities (`ExercisePerformance`, `ActivityPerformance`, `SetPerformance`).
+4. **`User` (Identity Entity)**: System boundary actor owning user preferences and domain references.
 
 ---
 
-## 3. Aggregate Boundaries & Encapsulation
+## 3. Aggregate Boundaries & Encapsulation Rules
 
 ```mermaid
 graph TD
     subgraph Aggregate_Routine["Aggregate Root: Routine"]
-        R_Root[Routine] --> WD1[WorkoutDay: Mon]
-        R_Root --> WD2[WorkoutDay: Tue]
-        WD1 --> EP1[ExercisePrescription]
-        WD1 --> EP2[ExercisePrescription]
+        R[Routine] --> WD[WorkoutDay]
+        WD --> EP[ExercisePrescription]
+        WD --> SA[SessionActivity]
+    end
+
+    subgraph Aggregate_Exercise["Aggregate Root: Exercise"]
+        EX[Exercise]
     end
 
     subgraph Aggregate_WorkoutSession["Aggregate Root: WorkoutSession"]
-        WS_Root[WorkoutSession] --> EPF1[ExercisePerformance]
-        WS_Root --> EPF2[ExercisePerformance]
-        EPF1 --> SP1[SetPerformance 1]
-        EPF1 --> SP2[SetPerformance 2]
+        WS[WorkoutSession] --> SPS[SessionPrescriptionSnapshot]
+        WS --> EPF[ExercisePerformance]
+        WS --> APF[ActivityPerformance]
+        EPF --> SP[SetPerformance]
     end
 
-    Aggregate_Routine -.->|Snapshot Factory creates| Aggregate_WorkoutSession
+    Aggregate_Routine -.->|SnapshotFactory materializes| Aggregate_WorkoutSession
+    Aggregate_WorkoutSession -.->|References by ExerciseId| Aggregate_Exercise
+    Aggregate_Routine -.->|References by ExerciseId| Aggregate_Exercise
 ```
 
 ### Boundary Rule 1: `Routine` Aggregate
-- **Root**: `Routine`.
-- **Enclosed**: `WorkoutDay`, `ExercisePrescription`, `SessionActivity`, `Phase`.
-- **Encapsulation Rules**:
-  - External code cannot mutate `ExercisePrescription` directly; it calls methods on `Routine` (e.g., `routine.add_prescription(weekday, prescription)`).
-  - `Routine` has **zero references** to `WorkoutSession` or historical performance data.
-  - Modifying a `Routine` never triggers side-effects in past or in-progress `WorkoutSession` instances.
+- Encapsulates `WorkoutDay`, `ExercisePrescription`, `SessionActivity`, and `Phase`.
+- Prescriptions cannot be modified from outside without passing through `Routine` methods.
+- Has **zero knowledge** of past or active `WorkoutSession` instances.
+- Does not enforce global uniqueness of the active routine; activation state is modified via `mark_active()` and orchestrated by `ActivateRoutineUseCase`.
 
 ### Boundary Rule 2: `WorkoutSession` Aggregate
-- **Root**: `WorkoutSession`.
-- **Enclosed**: `ExercisePerformance`, `SetPerformance`, `ActivityPerformance`.
-- **Encapsulation Rules**:
-  - `WorkoutSession` is the sole boundary through which sets and exercise substitutions are recorded:
-    - `session.record_set(exercise_id, set_data)`
-    - `session.substitute_exercise(original_exercise_id, new_exercise_id, reason)`
-    - `session.add_ad_hoc_exercise(exercise_id)`
-    - `session.finish(completion_policy)`
-  - Direct manipulation of inner `SetPerformance` instances outside the aggregate boundary is prohibited.
+- Encapsulates `SessionPrescriptionSnapshot`, `ExercisePerformance`, `SetPerformance`, and `ActivityPerformance`.
+- All modifications to performance state (recording sets, removing sets, swapping exercises, checking off activities) must be executed through methods on `WorkoutSession`.
+- **Targeted Operations**: Sets are recorded against a specific `ExercisePerformanceId`, preventing ambiguity between planned and substituted exercises.
+- **Set Identity Invariant**: Sets possess a unique `SetPerformanceId`. Removing a set operates on `set_id`; display order numbers are derived dynamically from sequence position.
+
+### Boundary Rule 3: `Exercise` Aggregate
+- Independent aggregate root. Modifying an exercise's instructions or category never mutates existing prescriptions or historical performances (which store snapshot names and IDs).
 
 ---
 
-## 4. Detailed Specification of Key Objects
+## 4. Metric Validation on `SetPerformance`
 
-### 4.1. `Routine` (Aggregate Root)
-1. **Identity**: `RoutineId` (UUID).
-2. **State**:
-   - `owner_id`: `UserId`
-   - `name`: string
-   - `is_active`: bool
-   - `activated_at`: optional `DateTime`
-   - `schedule`: dictionary mapping each `Weekday` (1..7) to a `WorkoutDay`
-   - `phases`: ordered list of `Phase` value objects
-3. **Invariants**:
-   - A routine must contain entries for all 7 weekdays.
-   - `activated_at` must be populated if and only if `is_active == True`.
-   - Phases must not have overlapping week intervals.
-4. **Behavior**:
-   - `activate(now: DateTime)`: Sets `is_active = True`, records `activated_at = now`.
-   - `deactivate()`: Sets `is_active = False`, clears `activated_at`.
-   - `resolve_phase(for_date: Date) -> Phase`: Calculates elapsed weeks:
-     $$\text{weeks\_elapsed} = \left\lfloor \frac{\text{for\_date} - \text{activated\_at.date}}{7} \right\rfloor + 1$$
-     Returns the matching `Phase`.
-   - `configure_workout_day(weekday, label, kind)`: Reconfigures a day (e.g. converting Sunday to Rest).
-5. **Relationships**: Owns 7 `WorkoutDay` entities; references `UserId`.
-6. **Lifecycle**: Created $\rightarrow$ Draft $\rightarrow$ Active $\leftrightarrow$ Inactive $\rightarrow$ Archived.
-7. **Allowed to Mutate**: Its own schedule, days, prescriptions, and phases.
-8. **Forbidden Knowledge**: Has no knowledge of `WorkoutSession`, calendar logs, or historical set recordings.
-
----
-
-### 4.2. `WorkoutDay` (Entity within Routine)
-1. **Identity**: `WorkoutDayId` (UUID).
-2. **State**:
-   - `weekday`: `Weekday`
-   - `kind`: `DayKind` (`Workout`, `Rest`, `Unscheduled`)
-   - `label`: string (e.g. *"Cuádriceps / Glúteo"*, *"Descanso"*)
-   - `prescriptions`: list of `ExercisePrescription`
-   - `activities`: list of `SessionActivity`
-3. **Invariants**:
-   - If `kind == Rest` or `Unscheduled`, `prescriptions` must be empty.
-   - Prescription ordering indices must be unique and sequential without gaps.
-4. **Behavior**:
-   - `add_prescription(exercise_id, target_sets, rep_range, ...)`
-   - `remove_prescription(prescription_id)`
-   - `reorder_prescriptions(ordered_ids: List[PrescriptionId])`
-   - `add_activity(description, duration)`
-5. **Relationships**: Child of `Routine`. References `ExerciseId`.
-6. **Lifecycle**: Co-terminous with parent `Routine`.
-
----
-
-### 4.3. `Exercise` (Entity / Reference Data)
-1. **Identity**: `ExerciseId` (UUID).
-2. **State**:
-   - `author_id`: optional `UserId` (null if system-seeded)
-   - `name`: string (e.g. *"Sentadilla búlgara en Smith"*)
-   - `category`: `MuscleGroup`
-   - `equipment`: `Equipment`
-   - `default_metric`: `MetricType` (`RepsWeight`, `Duration`, `DistanceDuration`)
-   - `instructions`: string
-3. **Invariants**:
-   - `name` cannot be blank.
-   - System exercises (`author_id == null`) are immutable by regular users.
-4. **Behavior**:
-   - `update_metadata(name, category, equipment, default_metric, instructions)` (only permitted if user is author).
-5. **Forbidden Knowledge**: Has no awareness of prescriptions, workouts, or performance history.
-
----
-
-### 4.4. `WorkoutSession` (Aggregate Root)
-1. **Identity**: `SessionId` (UUID).
-2. **State**:
-   - `user_id`: `UserId`
-   - `routine_id`: optional `RoutineId` (null if spontaneous/ad-hoc)
-   - `session_date`: `Date`
-   - `status`: `SessionStatus` (`In_Progress`, `Completed`, `Partially_Completed`, `Skipped`)
-   - `started_at`: `DateTime`
-   - `finished_at`: optional `DateTime`
-   - `exercises`: ordered list of `ExercisePerformance`
-   - `activities`: list of `ActivityPerformance`
-   - `notes`: string
-3. **Invariants**:
-   - If `status == In_Progress`, `finished_at` must be null.
-   - If `status in (Completed, Partially_Completed)`, `finished_at` must be $\ge$ `started_at`.
-   - Once marked `Completed`, `Partially_Completed`, or `Skipped`, the session is locked against further set modifications.
-4. **Behavior**:
-   - `record_set(exercise_id, set_number, reps, weight, duration, rir, notes) -> SetPerformance`
-   - `substitute_exercise(original_exercise_id, new_exercise_id, reason)`
-   - `add_ad_hoc_exercise(exercise_id)`
-   - `finish(completion_policy: CompletionPolicy) -> CompletionResult`: Evaluates completion, transitions status, and sets `finished_at = now`.
-   - `skip(reason: String)`: Transitions status to `Skipped` and records reason.
-5. **Allowed to Mutate**: Child `ExercisePerformance` and `SetPerformance` entities.
-6. **Forbidden Knowledge**: Knows nothing about future routines, upcoming calendar days, or external authentication providers.
-
----
-
-### 4.5. `ExercisePerformance` (Entity within WorkoutSession)
-1. **Identity**: `ExercisePerformanceId` (UUID).
-2. **State**:
-   - `prescribed_exercise_id`: optional `ExerciseId` (null if ad-hoc addition)
-   - `actual_exercise_id`: `ExerciseId`
-   - `prescription_snapshot`: optional `PrescriptionSnapshot`
-   - `sets`: list of `SetPerformance`
-   - `substitution`: optional `SubstitutionContext`
-   - `notes`: string
-3. **Invariants**:
-   - If substituted, `substitution` must be present and `actual_exercise_id != prescribed_exercise_id`.
-   - Set numbers must be strictly sequential starting from 1.
-4. **Behavior**:
-   - `append_set(reps, weight, duration, rir, notes)`
-   - `remove_set(set_number)`
-   - `calculate_workload() -> Workload`
-
----
-
-## 5. Domain Policies and Domain Services
-
-Domain rules that coordinate across entities or encapsulate algorithmic derivations are extracted into **Domain Services & Policies**:
+To prevent data corruption (e.g. logging 70kg on a timed Plank), `SetPerformance` creation is governed by a **Metric Validation Policy**:
 
 ```mermaid
-flowchart LR
-    subgraph Services["Domain Services & Policies"]
-        SSF[SessionSnapshotFactory]
-        CP[CompletionPolicy]
-        WLC[WorkloadCalculator]
-        AHC[AdherenceCalculator]
-        PRC[PersonalRecordCalculator]
-    end
+flowchart TD
+    M[MetricType of Exercise]
+    M -->|RepsWeight| V1{actual_reps != null?}
+    V1 -->|Yes| OK1[Valid Reps/Weight Set]
+    V1 -->|No| ERR1[Error: Repetitions required]
 
-    R[Routine] --> SSF
-    WD[WorkoutDay] --> SSF
-    SSF --> WS[WorkoutSession]
-    WS --> CP
-    WS --> WLC
-    Hist[(WorkoutSession History)] --> AHC
-    Hist --> PRC
+    M -->|Duration| V2{actual_duration != null?}
+    V2 -->|Yes| OK2[Valid Timed Set]
+    V2 -->|No| ERR2[Error: Duration required]
+
+    M -->|DistanceDuration| V3{duration or distance != null?}
+    V3 -->|Yes| OK3[Valid Distance/Duration Set]
+    V3 -->|No| ERR3[Error: Duration or distance required]
 ```
 
-### 5.1. `SessionSnapshotFactory`
-- **Role**: Factory domain service responsible for materializing a `WorkoutSession` from a `Routine`'s scheduled `WorkoutDay`.
-- **Contract**:
-  ```python
-  def create_session(
-      routine: Routine,
-      for_date: Date,
-      user_id: UserId,
-      now: DateTime
-  ) -> WorkoutSession
-  ```
-- **Rules**:
-  1. Identifies the weekday for `for_date`.
-  2. Queries `routine.get_current_phase(for_date)` to determine current phase modifiers (e.g. 3 sets vs 4 sets).
-  3. Deep-copies prescriptions and activities into frozen `PrescriptionSnapshot` value objects inside `ExercisePerformance` entities.
-  4. Returns a fresh `WorkoutSession` in `In_Progress` state.
+---
+
+## 5. Domain Behavioral Contracts & State Machines
+
+### 5.1. `WorkoutSession` Lifecycle State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> In_Progress: SessionSnapshotFactory / InitiateWorkout
+    
+    In_Progress --> In_Progress: record_set()
+    In_Progress --> In_Progress: remove_set()
+    In_Progress --> In_Progress: substitute_exercise()
+    In_Progress --> In_Progress: add_ad_hoc_exercise()
+    In_Progress --> In_Progress: record_activity()
+    
+    In_Progress --> Completed: finish() [100% set-intent achieved]
+    In_Progress --> Partially_Completed: finish() [>0% sets logged, some omitted]
+    In_Progress --> Skipped: skip(reason)
+    
+    Completed --> [*]: Locked (Immutable)
+    Partially_Completed --> [*]: Locked (Immutable)
+    Skipped --> [*]: Locked (Immutable)
+```
+
+### 5.2. Behavioral Contracts
+
+#### `WorkoutSession.record_set`
+- **Signature**: `record_set(performance_id: ExercisePerformanceId, set_data: SetData) -> SetPerformance`
+- **Preconditions**:
+  - `self.status == SessionStatus.In_Progress` (error if finalized).
+  - `performance_id` exists within `self.exercises`.
+  - `set_data` satisfies `MetricValidationPolicy` for the exercise's `MetricType`.
+- **Postconditions**:
+  - New `SetPerformance` instance appended to matching `ExercisePerformance.sets`.
+  - Returns created `SetPerformance`.
+
+#### `WorkoutSession.remove_set`
+- **Signature**: `remove_set(performance_id: ExercisePerformanceId, set_id: SetPerformanceId) -> None`
+- **Preconditions**:
+  - `self.status == SessionStatus.In_Progress`.
+  - `set_id` exists in `performance_id`.
+- **Postconditions**:
+  - `SetPerformance` matching `set_id` is removed.
+
+#### `WorkoutSession.substitute_exercise`
+- **Signature**: `substitute_exercise(performance_id: ExercisePerformanceId, new_exercise_id: ExerciseId, reason: String) -> None`
+- **Preconditions**:
+  - `self.status == SessionStatus.In_Progress`.
+  - `performance_id.sets` is empty (substitution must occur before logging sets on that performance).
+- **Postconditions**:
+  - `performance.performed_exercise_id = new_exercise_id`.
+  - `performance.substitution = SubstitutionContext(original_exercise_id, reason, now)`.
+
+#### `WorkoutSession.finish`
+- **Signature**: `finish(completion_policy: CompletionPolicy, override_status: Optional[SessionStatus] = None) -> CompletionResult`
+- **Preconditions**:
+  - `self.status == SessionStatus.In_Progress`.
+- **Postconditions**:
+  - If `override_status` is provided: `self.status = override_status`.
+  - Else: `self.status = completion_policy.evaluate(self).suggested_status`.
+  - `self.finished_at = now`.
+  - Session becomes locked against further mutation.
+
+#### `WorkoutSession.skip`
+- **Signature**: `skip(reason: String) -> None`
+- **Preconditions**:
+  - `self.status == SessionStatus.In_Progress` and no sets have been logged.
+- **Postconditions**:
+  - `self.status = SessionStatus.Skipped`.
+  - `self.finished_at = now`.
+  - `self.notes = reason`.
 
 ---
 
-### 5.2. `CompletionPolicy`
-- **Role**: Implements the set-intent evaluation policy to evaluate completion status.
-- **Contract**:
-  ```python
-  def evaluate(session: WorkoutSession) -> CompletionEvaluation:
-      # Returns:
-      # - suggested_status: Completed | Partially_Completed
-      # - total_prescribed_sets: Int
-      # - total_logged_sets: Int
-      # - completed_exercise_count: Int
-      # - total_prescribed_exercises: Int
-  ```
-- **Rules**:
-  1. An exercise is complete if count of logged sets $\ge$ prescribed sets (adjusted by active phase) and sets represent attempted work.
-  2. The session is `Completed` if all prescribed exercises are complete.
-  3. The session is `Partially_Completed` if $>0$ sets were logged but some prescribed exercises/sets were omitted.
+## 6. Domain Policies & Derivations
+
+### 6.1. `SessionSnapshotFactory`
+Materializes a `WorkoutSession` from a scheduled `WorkoutDay`:
+1. Determines elapsed weeks since routine activation:
+   $$\text{week\_index} = \left\lfloor \frac{\text{session\_date} - \text{routine.activated\_at.date}}{7} \right\rfloor + 1$$
+2. Queries `routine.get_current_phase(session_date)` to resolve active phase and target set overrides (e.g. 3 sets vs 4 sets).
+3. Freezes `SessionPrescriptionSnapshot` containing all prescribed exercises and activities.
+4. Generates an initial `ExercisePerformance` entity for each prescribed exercise, setting both `planned_exercise_id` and `performed_exercise_id` to the prescribed exercise ID.
+5. Generates an initial `ActivityPerformance` for each prescribed activity.
+6. Returns `WorkoutSession` in `In_Progress` status.
+
+### 6.2. `CompletionPolicy` (Set-Intent Evaluation)
+Evaluates whether a session achieved full or partial completion:
+- **Exercise Complete**: Evaluated as complete if $\text{count}(\text{valid sets logged}) \ge \text{target sets from snapshot}$.
+- **Suggested Status**:
+  - If $100\%$ of prescribed exercises are complete $\rightarrow$ `Completed`.
+  - If $>0$ sets logged but $<100\%$ prescribed exercises complete $\rightarrow$ `Partially_Completed`.
+
+### 6.3. `WorkloadCalculator`
+Calculates metric-dependent physical workload:
+- **Weighted Volume**: $\sum_{i} (\text{actual\_reps}_i \times \text{actual\_weight}_i\text{.to\_kg()})$
+- **Duration Workload**: $\sum_{i} \text{actual\_duration}_i\text{.seconds}$
+- **Distance Workload**: $\sum_{i} \text{actual\_distance}_i\text{.meters}$
+
+### 6.4. `AdherenceCalculator`
+Calculates objective habit consistency over a window $[T_{\text{start}}, T_{\text{end}}]$:
+$$\text{Scheduled Count} = N_{\text{scheduled}}$$
+$$\text{Completion Rate} = \frac{N_{\text{completed}}}{N_{\text{scheduled}}}$$
+$$\text{Partial Rate} = \frac{N_{\text{partially\_completed}}}{N_{\text{scheduled}}}$$
+$$\text{Skip Rate} = \frac{N_{\text{skipped}}}{N_{\text{scheduled}}}$$
+$$\text{Set Adherence Rate} = \frac{\sum \text{Sets Performed}}{\sum \text{Sets Prescribed}}$$
 
 ---
 
-### 5.3. `WorkloadCalculator`
-- **Role**: Computes metric-dependent physical workload for performances and sessions without conflating units.
-- **Contract**:
-  ```python
-  def calculate_set_workload(set_perf: SetPerformance) -> Workload
-  def calculate_session_workload(session: WorkoutSession) -> SessionWorkload
-  ```
-- **Calculations**:
-  - **Weighted Volume (Tonnage)**: $\sum (\text{actual\_reps} \times \text{actual\_weight.to\_kg()})$
-  - **Cumulative Duration**: $\sum \text{actual\_duration.seconds}$
-  - **Distance**: $\sum \text{actual\_distance}$
-
----
-
-### 5.4. `AdherenceCalculator`
-- **Role**: Pure derivation service calculating factual consistency rates over an evaluation window.
-- **Contract**:
-  ```python
-  def calculate_adherence(
-      scheduled_count: int,
-      sessions: List[WorkoutSession]
-  ) -> AdherenceReport
-  ```
-- **Formulas**:
-  - `completed_rate = count(Completed) / scheduled_count`
-  - `partial_rate = count(Partially_Completed) / scheduled_count`
-  - `skip_rate = count(Skipped) / scheduled_count`
-  - `set_adherence = total_sets_performed / total_sets_prescribed`
-
----
-
-### 5.5. `PersonalRecordCalculator`
-- **Role**: Scans historical `WorkoutSession` instances to derive personal bests for a specific `ExerciseId`.
-- **Derivations**:
-  - **Peak Weight Lifted**: $\max(\text{actual\_weight})$ across all sets.
-  - **Peak Volume in Single Set**: $\max(\text{reps} \times \text{weight})$.
-  - **Estimated 1RM (Epley)**: $\max\left(\text{weight} \times \left(1 + \frac{\text{reps}}{30}\right)\right)$ for sets where $1 \le \text{reps} \le 10$.
-
----
-
-## 6. Core Application Use Cases (Interactors)
-
-Below are the primary transactional boundaries orchestrating domain entities and repositories:
+## 7. Application Use Cases (Interactors)
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor User
-    participant UC as InitiateWorkoutUseCase
+    participant UC as ActivateRoutineUseCase
     participant RRepo as RoutineRepository
-    participant SRepo as SessionRepository
-    participant SSF as SessionSnapshotFactory
 
-    User->>UC: execute(date)
-    UC->>RRepo: get_active_routine(user_id)
-    RRepo-->>UC: routine
-    UC->>SSF: create_session(routine, date, user_id, now)
-    SSF-->>UC: workout_session
-    UC->>SRepo: save(workout_session)
-    SRepo-->>UC: saved_session
-    UC-->>User: WorkoutSessionDTO (In_Progress)
+    User->>UC: execute(target_routine_id)
+    UC->>RRepo: get_active(user_id)
+    opt Active routine exists
+        RRepo-->>UC: current_active_routine
+        UC->>current_active_routine: mark_inactive()
+        UC->>RRepo: save(current_active_routine)
+    end
+    UC->>RRepo: get_by_id(target_routine_id)
+    RRepo-->>UC: target_routine
+    UC->>target_routine: mark_active(now)
+    UC->>RRepo: save(target_routine)
+    UC-->>User: Success (target_routine activated)
 ```
 
-### Use Case Inventory
+### Complete Use Case Inventory
 
-1. **`CreateRoutine(user_id, name, schedule_spec, phases)`**: Instantiates and persists a new `Routine`.
-2. **`ActivateRoutine(user_id, routine_id)`**: Deactivates any currently active routine for the user and activates the specified routine.
-3. **`InitiateWorkout(user_id, date)`**: Finds active routine, invokes `SessionSnapshotFactory`, and persists the new in-progress `WorkoutSession`.
-4. **`RecordSet(user_id, session_id, exercise_id, set_data)`**: Loads `WorkoutSession`, appends set via `session.record_set(...)`, and saves.
-5. **`SubstituteExercise(user_id, session_id, original_id, new_id, reason)`**: Records substitution on the active session without altering `Routine`.
-6. **`FinishWorkout(user_id, session_id, override_status=None)`**: Evaluates completion via `CompletionPolicy`, marks session finished, and persists.
-7. **`SkipWorkout(user_id, date, reason)`**: Creates or marks a session as `Skipped`.
-8. **`QueryWeeklyCalendar(user_id, start_date, end_date)`**: Merges active routine's projected `ScheduledWorkout` items with recorded `WorkoutSession` instances for the calendar grid.
-9. **`QueryExerciseProgression(user_id, exercise_id)`**: Loads history for `exercise_id`, computes workload and PR trends via domain services, and returns time-series data.
-10. **`CalculateAdherenceReport(user_id, window_start, window_end)`**: Runs `AdherenceCalculator` over the specified historical date range.
+1. **`CreateRoutineUseCase(user_id, name, schedule_spec, phases)`**: Creates new `Routine` aggregate.
+2. **`ActivateRoutineUseCase(user_id, routine_id)`**: Enforces the single-active-routine policy by deactivating the current active routine before activating the target routine.
+3. **`InitiateWorkoutUseCase(user_id, date)`**: Calls `SessionSnapshotFactory` and saves new `WorkoutSession`.
+4. **`RecordSetUseCase(user_id, session_id, performance_id, set_data)`**: Appends validated set to performance.
+5. **`RemoveSetUseCase(user_id, session_id, performance_id, set_id)`**: Removes set by identity.
+6. **`SubstituteExerciseUseCase(user_id, session_id, performance_id, new_exercise_id, reason)`**: Records substitution.
+7. **`AddAdHocExerciseUseCase(user_id, session_id, exercise_id)`**: Appends unscheduled exercise to active session.
+8. **`RecordActivityUseCase(user_id, session_id, activity_perf_id, actual_duration, actual_dist, notes)`**: Logs activity completion.
+9. **`FinishWorkoutUseCase(user_id, session_id, override_status=None)`**: Evaluates completion via `CompletionPolicy` and finalizes session.
+10. **`SkipWorkoutUseCase(user_id, date, reason)`**: Records skipped session.
+11. **`QueryWeeklyCalendarUseCase(user_id, start_date, end_date)`**: Returns projected `ScheduledWorkout` items alongside recorded `WorkoutSession` instances.
+12. **`QueryExerciseHistoryUseCase(user_id, exercise_id)`**: Returns historical performances where `performed_exercise_id == exercise_id`.
+13. **`CalculateAdherenceUseCase(user_id, start_date, end_date)`**: Generates factual adherence metrics.
 
 ---
 
-## 7. Ports & Adapters Architecture (Hexagonal)
+## 8. Clean Architecture Dependency Graph
 
 ```mermaid
 graph TD
-    subgraph DrivingAdapters["Driving / Primary Adapters (Incoming)"]
-        API[FastAPI / REST Controllers]
-        CLI[Admin / Seed CLI]
+    subgraph Infrastructure["Infrastructure Layer"]
+        FastAPI[FastAPI Controllers / REST API]
+        AuthAdapter[Authelia Reverse-Proxy Header Adapter]
+        SQLRepo[PostgreSQL / SQLite Repositories]
     end
 
-    subgraph ApplicationCore["Application Core (Use Cases / Domain)"]
-        UC[Use Cases / Interactors]
-        DM[Domain Model & Policies]
+    subgraph Application["Application Layer (Use Cases)"]
+        UC[Application Use Cases]
+        DTO[Data Transfer Objects / Schemas]
     end
 
-    subgraph DrivenPorts["Driven / Secondary Ports (Interfaces)"]
-        IPort_Auth[AuthProvider Port]
-        IPort_Routine[RoutineRepository Port]
-        IPort_Session[SessionRepository Port]
-        IPort_Exercise[ExerciseRepository Port]
+    subgraph Domain["Domain Layer (Pure Business Rules)"]
+        Agg_Routine[Routine Aggregate]
+        Agg_Session[WorkoutSession Aggregate]
+        Agg_Exercise[Exercise Aggregate]
+        DomainServices[Domain Policies & Calculators]
+        Ports[Repository & Auth Ports]
     end
 
-    subgraph DrivenAdapters["Driven / Secondary Adapters (Infrastructure)"]
-        AuthHeader[Authelia Forward-Auth Header Adapter]
-        SQLRepo[PostgreSQL / SQLite SQLModel/SQLAlchemy Adapter]
-    end
-
-    API --> UC
-    CLI --> UC
-    UC --> DM
-    UC --> DrivenPorts
-    DrivenPorts --> DrivenAdapters
+    FastAPI --> UC
+    UC --> Domain
+    UC --> Ports
+    AuthAdapter --> Ports
+    SQLRepo --> Ports
 ```
-
-### Port Definitions:
-- `AuthProvider`: Resolves external identity headers (`Remote-User`, `Remote-Email`) into a domain `UserId`.
-- `RoutineRepository`: `save(routine)`, `get_by_id(id)`, `get_active(user_id)`.
-- `WorkoutSessionRepository`: `save(session)`, `get_by_id(id)`, `find_by_user_and_date(user_id, date)`, `find_history_by_exercise(user_id, exercise_id)`.
-- `ExerciseRepository`: `save(exercise)`, `get_by_id(id)`, `list_catalog(user_id)`.

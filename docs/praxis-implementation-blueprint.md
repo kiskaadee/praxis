@@ -1,8 +1,8 @@
 ---
 title: Implementation Blueprint
 description: Translates the approved SRS (v1.0.2) and Domain Model (v1.0.1) into concrete Python implementation decisions. Records all design choices made during the Phase 0 implementation-readiness pass.
-version: 0.1.0
-status: Active
+version: 0.2.0
+status: Phase 0 Complete
 date: 2026-09-24
 tags:
   - implementation
@@ -19,8 +19,8 @@ tags:
 
 | Document Attribute | Specification |
 | :--- | :--- |
-| **Document Version** | `0.1.0` |
-| **Status** | Active |
+| **Document Version** | `0.2.0` |
+| **Status** | Phase 0 Complete |
 | **Last Updated** | 2026-09-24 |
 | **SRS Baseline** | [`praxis-srs-v1.0.2.md`](praxis-srs-v1.0.2.md) |
 | **Domain Model Baseline** | [`praxis-domain-model-v1.0.1.md`](praxis-domain-model-v1.0.1.md) |
@@ -48,6 +48,7 @@ src/praxis/
 │   │   ├── identifiers.py       # UserId, ExerciseId, RoutineId, SessionId, PrescriptionId, …
 │   │   ├── measurement.py       # Weight, Duration, Distance, RIR, RepRange
 │   │   ├── enums.py             # Weekday, DayKind, MetricType, SessionStatus, MuscleGroup, Equipment, Unit
+│   │   ├── set_data.py          # SetData (input value object for MetricValidationPolicy and record_set)
 │   │   └── snapshot.py          # SessionPrescriptionSnapshot, PrescriptionSnapshotItem, ActivitySnapshotItem, SubstitutionContext
 │   ├── policies/
 │   │   ├── __init__.py
@@ -219,7 +220,7 @@ class ExerciseId:
 
 **Rationale**: Strong typing prevents passing a `RoutineId` where an `ExerciseId` is expected. Wrapping `uuid.UUID` (not raw `str`) gives canonical comparison semantics and clean serialisation.
 
-All IDs are defined in `domain/value_objects/identifiers.py`.
+All IDs are defined in `praxis/domain/value_objects/identifiers.py`.
 
 ---
 
@@ -246,7 +247,7 @@ class SessionStatus(str, Enum):
 
 ## 6. Exception Strategy
 
-Domain exceptions live in `domain/exceptions.py`. No third-party libraries.
+Domain exceptions live in `praxis/domain/exceptions.py`. No third-party libraries.
 
 ```python
 class PraxisDomainError(Exception):
@@ -321,25 +322,62 @@ def create(
 
 ### 9.1. `SetPerformance` — Metric Field Requirements (Decision)
 
-The domain model lists `actual_reps`, `actual_weight`, `actual_duration`, and the SRS workload rules reference `actual_distance`. The `DistanceDuration` metric type is handled via `ActivityPerformance.actual_distance`, **not** `SetPerformance`.
+The domain model lists `actual_reps`, `actual_weight`, and `actual_duration` on `SetPerformance`. The SRS workload rules (FR-ANL-2) also reference distance. `DistanceDuration` exercises cover two distinct activity patterns that require different representations:
 
-**Decision**:
+```text
+DistanceDuration
+├── Continuous activity (e.g. 20-min stationary bike)
+│     → ActivityPerformance.actual_distance / actual_duration
+└── Discrete interval set (e.g. 400m sprint as one logged set)
+      → SetPerformance.actual_distance / actual_duration
+```
+
+**Decision**: `actual_distance: Distance | None` is added to `SetPerformance` to cover the discrete-interval case. `ActivityPerformance.actual_distance` covers the continuous-activity case. Both fields are optional; `MetricValidationPolicy` requires at least one to be non-null when the metric type is `DistanceDuration`.
 
 | Metric Type | Required on `SetPerformance` | Optional on `SetPerformance` |
 | :--- | :--- | :--- |
-| `RepsWeight` | `actual_reps` (int ≥ 0) | `actual_weight` (may be bodyweight = null) |
+| `RepsWeight` | `actual_reps` (int ≥ 0) | `actual_weight` (null = bodyweight) |
 | `Duration` | `actual_duration` (Duration) | — |
 | `DistanceDuration` | at least one of `actual_duration` or `actual_distance` | the other |
 
-`actual_distance` is added as `Distance | None` to `SetPerformance` to handle interval-style distance sets (e.g., 400m sprints logged as a set). `ActivityPerformance.actual_distance` handles continuous cardio.
+**Rationale**: Treating sprint intervals as sets is consistent with how strength training is logged — a 400m sprint is a discrete effort with a start and end, not a continuous session activity. The two-case split keeps `ActivityPerformance` for unstructured/continuous cardio and `SetPerformance` for structured intervals.
 
-**Rationale**: The SRS FR-ANL-2 workload formula references distance. The domain model diagram shows `Distance actual_distance` on `ActivityPerformance`. Sprint-style distance sets are discrete efforts that fit `SetPerformance`. Both are supported.
-
-The `MetricValidationPolicy` enforces these rules in `domain/policies/metric_validation.py`.
+`MetricValidationPolicy` enforces these rules in `praxis/domain/policies/metric_validation.py`.
 
 ---
 
-### 9.2. Completion Semantics — `CompletionPolicy` vs. SRS "Honest Effort" (Decision)
+### 9.2. `SetData` — Input Value Object (Decision)
+
+`MetricValidationPolicy.validate()` and `WorkoutSession.record_set()` both need a typed input value. Rather than accepting loose keyword arguments, they receive a `SetData` value object.
+
+**Decision**: `SetData` is a frozen dataclass defined in `praxis/domain/value_objects/set_data.py`.
+
+```python
+# praxis/domain/value_objects/set_data.py
+from __future__ import annotations
+from dataclasses import dataclass
+from praxis.domain.value_objects.measurement import Weight, Duration, Distance, RIR
+
+@dataclass(frozen=True)
+class SetData:
+    """Carries the raw input for one logged set before it becomes a SetPerformance.
+
+    All measurement fields are optional at construction; MetricValidationPolicy
+    determines which combination is valid for a given MetricType.
+    """
+    actual_reps: int | None = None
+    actual_weight: Weight | None = None
+    actual_duration: Duration | None = None
+    actual_distance: Distance | None = None
+    reps_in_reserve: RIR | None = None
+    notes: str = ""
+```
+
+`SetData` lives in the domain layer so that `MetricValidationPolicy` (also domain) can reference it without any application or infrastructure imports.
+
+---
+
+### 9.3. Completion Semantics — `CompletionPolicy` vs. SRS "Honest Effort" (Decision)
 
 SRS FR-STAT-2 says: *"An exercise is evaluated as complete when all prescribed sets have been attempted with honest effort (logging reps within target range or completing full sets short of failure with RIR/notes)."*
 
@@ -369,7 +407,7 @@ class CompletionPolicy:
 
 ---
 
-### 9.3. `WorkoutSession.finish()` — Legal Override States (Decision)
+### 9.4. `WorkoutSession.finish()` — Legal Override States (Decision)
 
 The domain model permits an `Optional[override_status]` parameter. The question is which states are valid overrides.
 
@@ -390,7 +428,7 @@ This is enforced inside `WorkoutSession.finish()` before any state transition oc
 
 ---
 
-### 9.4. Metric Snapshotting — What Gets Frozen (Decision)
+### 9.5. Metric Snapshotting — What Gets Frozen (Decision)
 
 The snapshot must make each session historically stable even if the live `Exercise` aggregate is later updated (e.g., name changed, category corrected).
 
@@ -416,7 +454,7 @@ class PrescriptionSnapshotItem:
 
 ---
 
-### 9.5. `ScheduledWorkout` — Aggregate vs. Read Model (Decision)
+### 9.6. `ScheduledWorkout` — Aggregate vs. Read Model (Decision)
 
 SRS FR-CAL-1/CAL-2 references `ScheduledWorkout` as a projection. Domain Model §7 use case #11 (`QueryWeeklyCalendarUseCase`) returns projected items.
 
@@ -448,12 +486,15 @@ class ScheduledWorkoutProjection:
 
 ## 10. Repository Port Shapes
 
-Ports are declared as `Protocol` classes in `application/ports/repositories.py`. No base classes, no generics superclass — each port is explicit and minimal.
+> [!NOTE]
+> The method signatures below are **provisional** — derived from the approved use case inventory in Domain Model §7. They will be refined in Phase 2 as each use case is implemented. The existence and structure of ports (as `Protocol` classes in `application/ports/`) is architectural and frozen; the exact query methods are not.
+
+Ports are declared as `Protocol` classes in `praxis/application/ports/repositories.py`. No base classes, no generics superclass — each port is explicit and minimal.
 
 ```python
 from typing import Protocol
-from domain.aggregates.routine import Routine
-from domain.value_objects.identifiers import UserId, RoutineId
+from praxis.domain.aggregates.routine import Routine
+from praxis.domain.value_objects.identifiers import UserId, RoutineId
 
 class RoutineRepository(Protocol):
     def save(self, routine: Routine) -> None: ...
@@ -556,26 +597,33 @@ This means `SetPerformance` has no `to_dict()`. The persistence adapter is respo
 
 | Phase | Scope | Entry Criterion | Done When |
 | :--- | :--- | :--- | :--- |
-| **Phase 0** | Implementation Readiness | Specs baselined | All ambiguities in §9 resolved (this document) |
-| **Phase 1** | Pure Domain Foundation | Phase 0 complete | All domain tests green, ≥90% coverage, mypy clean |
+| **Phase 0** | Implementation Readiness | Specs baselined | All Phase-1-blocking ambiguities resolved; implementation conventions frozen; remaining questions explicitly deferred |
+| **Phase 1** | Pure Domain Foundation | Phase 0 complete | All domain tests green; `ruff` and `pyright strict` clean |
 | **Phase 2** | Application Layer | Phase 1 complete | All use case tests green with in-memory fakes |
 | **Phase 3** | Infrastructure | Phase 2 complete | Integration tests pass with SQLite |
 | **Phase 4** | FastAPI Interface | Phase 3 complete | OpenAPI spec generated, integration round-trips pass |
 | **Phase 5** | Containerisation | Phase 4 complete | Docker Compose stack runs, Authelia header adapter wired |
 
+> [!NOTE]
+> **Coverage and linting are project quality policy, not domain architecture.** The 90% coverage gate and `pyright strict` requirement are enforced by the pre-push hook and `pyproject.toml` configuration (see `AGENTS.md §5`). They apply across all phases, but they are toolchain constraints — they do not determine whether a concept belongs in the domain layer.
+
 ---
 
-## 15. Open Questions (Not Blocking Phase 1)
+## 15. Open Questions
 
-These are deferred — they do not affect the domain layer and will be resolved in later phases.
+Questions are classified by when they become blocking.
+
+### Resolved
+
+| # | Question | Resolution |
+| :--- | :--- | :--- |
+| **OQ-2** | `Phase.end_week = None` means open-ended. What should `get_current_phase()` return when no phase matches the current week? | **Resolved**: Return the phase with the highest `start_week` (the last-defined phase). This implements "Week 3+" semantics from the reference training program. An empty `phases` list raises `ValueError` at construction. |
+
+### Deferred (not blocking Phase 1)
 
 | # | Question | Blocking |
 | :--- | :--- | :--- |
-| OQ-1 | `WorkoutSession.routine_id` is nullable for ad-hoc sessions (no routine). Should `session_date` uniqueness be enforced at application or DB level? | Phase 2 |
-| OQ-2 | `Phase.end_week = None` means "open-ended". What happens when `get_current_phase` finds no matching phase? Return last phase or raise? | Phase 1 (`Routine`) |
+| OQ-1 | `WorkoutSession.routine_id` is nullable for ad-hoc sessions. Should `session_date` uniqueness be enforced at application or DB level? | Phase 2 |
 | OQ-3 | Weight unit preference — stored on `User.profile` or derived per-request? | Phase 2 |
-| OQ-4 | `ExercisePrescription.target_weight = None` is valid (bodyweight). How is this communicated in the snapshot / UI suggestion? | Phase 4 |
+| OQ-4 | `ExercisePrescription.target_weight = None` is valid (bodyweight). How is this communicated to the snapshot consumer / UI? | Phase 4 |
 | OQ-5 | Exercise catalog seeding (FR-EX-1) — migration fixture or Python data file? | Phase 3 |
-
-> [!NOTE]
-> OQ-2 must be resolved before implementing `Routine.get_current_phase()` in Phase 1. **Proposed resolution**: return the last defined phase (highest `start_week`) when the current week exceeds all `end_week` values. This matches the reference program's "Week 3+" semantics.
