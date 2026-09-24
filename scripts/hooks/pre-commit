@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# =============================================================================
+# pre-commit hook — format + lint
+#
+# Runs on every commit. Fast (< 1s). Auto-fixes safe issues and re-stages them.
+# Fails the commit if unfixable violations remain.
+# =============================================================================
+set -euo pipefail
+
+VENV_BIN="$(git rev-parse --show-toplevel)/.venv/bin"
+
+# Colour helpers (safe — falls back silently if terminal doesn't support it)
+RED=$(tput setaf 1 2>/dev/null || true)
+GRN=$(tput setaf 2 2>/dev/null || true)
+YLW=$(tput setaf 3 2>/dev/null || true)
+RST=$(tput sgr0    2>/dev/null || true)
+
+info()  { echo "${YLW}[pre-commit]${RST} $*"; }
+ok()    { echo "${GRN}[pre-commit]${RST} $*"; }
+fail()  { echo "${RED}[pre-commit]${RST} $*" >&2; }
+
+# Collect only staged Python files that still exist on disk
+STAGED_PY=$(git diff --cached --name-only --diff-filter=d | grep '\.py$' || true)
+
+if [[ -z "$STAGED_PY" ]]; then
+    ok "No Python files staged — skipping."
+    exit 0
+fi
+
+info "Staged Python files:"
+echo "$STAGED_PY" | sed 's/^/  /'
+
+# ---------------------------------------------------------------------------
+# 1. ruff format  (auto-fixes formatting, then re-stages)
+# ---------------------------------------------------------------------------
+info "Running ruff format …"
+echo "$STAGED_PY" | xargs "$VENV_BIN/ruff" format --quiet
+
+# ---------------------------------------------------------------------------
+# 2. ruff check --fix  (auto-fixes safe lint issues, then re-stages)
+# ---------------------------------------------------------------------------
+info "Running ruff check --fix …"
+if ! echo "$STAGED_PY" | xargs "$VENV_BIN/ruff" check --fix --quiet; then
+    fail "ruff found unfixable lint violations. Fix them and re-stage."
+    exit 1
+fi
+
+# Re-stage any files ruff touched
+echo "$STAGED_PY" | xargs git add
+
+ok "Format + lint passed."

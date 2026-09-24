@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# =============================================================================
+# pre-push hook — type check + unit tests
+#
+# Runs on every push. Slower than pre-commit (2–5s) but acceptable at push time.
+# Blocks the push if pyright finds type errors OR unit tests fail.
+# =============================================================================
+set -euo pipefail
+
+ROOT=$(git rev-parse --show-toplevel)
+VENV_BIN="$ROOT/.venv/bin"
+
+RED=$(tput setaf 1 2>/dev/null || true)
+GRN=$(tput setaf 2 2>/dev/null || true)
+YLW=$(tput setaf 3 2>/dev/null || true)
+RST=$(tput sgr0    2>/dev/null || true)
+
+info()  { echo "${YLW}[pre-push]${RST} $*"; }
+ok()    { echo "${GRN}[pre-push]${RST} $*"; }
+fail()  { echo "${RED}[pre-push]${RST} $*" >&2; }
+
+FAILED=0
+
+# ---------------------------------------------------------------------------
+# 1. Pyright — strict type checking
+# ---------------------------------------------------------------------------
+info "Running pyright …"
+if ! "$VENV_BIN/pyright" "$ROOT/src" --outputjson 2>/dev/null \
+    | "$VENV_BIN/python" -c "
+import sys, json
+data = json.load(sys.stdin)
+summary = data.get('summary', {})
+errors   = summary.get('errorCount', 0)
+warnings = summary.get('warningCount', 0)
+# Print each diagnostic
+for diag in data.get('generalDiagnostics', []):
+    sev  = diag.get('severity', 'error')
+    msg  = diag.get('message', '')
+    file = diag.get('file', '')
+    rng  = diag.get('range', {})
+    line = rng.get('start', {}).get('line', 0) + 1
+    print(f'  {sev.upper()}: {file}:{line}: {msg}')
+print(f'pyright: {errors} error(s), {warnings} warning(s)')
+sys.exit(1 if errors > 0 else 0)
+"; then
+    fail "Pyright found type errors. Fix them before pushing."
+    FAILED=1
+else
+    ok "Pyright passed."
+fi
+
+# ---------------------------------------------------------------------------
+# 2. pytest — unit tests only (no I/O, fast)
+# ---------------------------------------------------------------------------
+info "Running unit tests …"
+if ! "$VENV_BIN/pytest" -m unit --tb=short -q "$ROOT/tests" 2>&1; then
+    fail "Unit tests failed. Fix them before pushing."
+    FAILED=1
+else
+    ok "Unit tests passed."
+fi
+
+# ---------------------------------------------------------------------------
+# Final verdict
+# ---------------------------------------------------------------------------
+if [[ $FAILED -ne 0 ]]; then
+    echo ""
+    fail "Push blocked. Address the issues above."
+    echo ""
+    echo "  To bypass this hook (use sparingly):"
+    echo "    git push --no-verify"
+    echo ""
+    exit 1
+fi
+
+ok "All checks passed — pushing."
