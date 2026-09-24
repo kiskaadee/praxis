@@ -1,16 +1,27 @@
 ---
-type: inbox
-created: 2026-09-24
-project: praxis
-tags: [praxis, domain-model, oop, ddd, clean-architecture, homelab]
+title: Domain Model & OOP Architecture Specification — v1.0.0 Draft (Archived)
+description: Initial domain model specification draft for Praxis, preserved for historical and comparative reference.
+version: 1.0.0
+status: Superseded / Archive
+date: 2026-09-24
+tags:
+  - domain-model
+  - ddd
+  - archive
 ---
 
-# Praxis — Domain Model & OOP Design Specification
+# Domain Model & OOP Architecture Specification — v1.0.0 Draft (Archived)
 
-**Document Version:** 1.0.0  
-**Date:** 2026-09-24  
-**Status:** Approved Domain Design Baseline  
-**Prerequisite:** [praxis-srs.md](../inbox/praxis-srs.md)
+> [!WARNING]
+> **Superseded Specification**: This document is an initial draft preserved for historical reference and auditability. The canonical, active specification is maintained in [`praxis-domain-model-v1.0.1.md`](praxis-domain-model-v1.0.1.md).
+
+| Document Attribute | Specification |
+| :--- | :--- |
+| **Document Version** | `1.0.0` |
+| **Status** | Superseded / Historical Archive |
+| **Date** | 2026-09-24 |
+| **Canonical Baseline** | [`praxis-domain-model-v1.0.1.md`](praxis-domain-model-v1.0.1.md) |
+| **Prerequisite SRS** | [`praxis-srs.md`](praxis-srs.md) |
 
 ---
 

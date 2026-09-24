@@ -1,17 +1,27 @@
 ---
-type: inbox
-created: 2026-09-24
-project: praxis
-tags: [praxis, domain-model, oop, ddd, clean-architecture, homelab]
+title: Domain Model & OOP Architecture Specification
+description: Canonical domain model, aggregates, entities, value objects, behavioral contracts, and use cases for Praxis.
+version: 1.0.1
+status: Approved Domain Baseline
+date: 2026-09-24
+tags:
+  - domain-model
+  - ddd
+  - clean-architecture
+  - oop
 ---
 
-# Praxis — Domain Model & OOP Design Specification
+# Domain Model & OOP Architecture Specification
 
-**Document Version:** 1.0.1  
-**Date:** 2026-09-24  
-**Status:** Approved Domain Design Baseline  
-**Previous Version:** [praxis-domain-model.md](../inbox/praxis-domain-model.md)  
-**SRS Baseline:** [praxis-srs-v1.0.2.md](../inbox/praxis-srs-v1.0.2.md)
+> Canonical Domain Model, Object-Oriented Design, and Clean Architecture Specification for **Praxis**.
+
+| Document Attribute | Specification |
+| :--- | :--- |
+| **Document Version** | `1.0.1` |
+| **Status** | Approved Domain Baseline |
+| **Last Updated** | 2026-09-24 |
+| **SRS Baseline** | [`praxis-srs-v1.0.2.md`](praxis-srs-v1.0.2.md) |
+| **Previous Revision** | [`praxis-domain-model.md`](praxis-domain-model.md) (`v1.0.0`) |
 
 ---
 

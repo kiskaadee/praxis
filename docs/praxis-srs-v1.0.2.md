@@ -1,17 +1,26 @@
 ---
-type: inbox
-created: 2026-09-24
-project: praxis
-tags: [praxis, srs, homelab, workout-tracker, architecture]
+title: Software Requirements Specification (SRS)
+description: Canonical Software Requirements Specification for the Praxis workout tracking and habit execution platform.
+version: 1.0.2-draft
+status: Canonical Baseline
+date: 2026-09-24
+tags:
+  - requirements
+  - srs
+  - specification
+  - architecture
 ---
 
 # Software Requirements Specification (SRS)
-## Project: Praxis — Personal Workout & Habit Tracking Platform
 
-**Version:** 1.0.2-draft  
-**Date:** 2026-09-24  
-**Status:** Draft Baseline (Refined)  
-**Previous Version:** [praxis-srs.md](../inbox/praxis-srs.md)
+> Canonical Software Requirements Specification for the **Praxis** workout tracking and habit execution platform.
+
+| Document Attribute | Specification |
+| :--- | :--- |
+| **Document Version** | `1.0.2-draft` |
+| **Status** | Canonical Requirements Baseline (Refined) |
+| **Last Updated** | 2026-09-24 |
+| **Previous Revision** | [`praxis-srs.md`](praxis-srs.md) (`v1.0.0-draft`) |
 
 ---
 

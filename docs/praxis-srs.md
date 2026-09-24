@@ -1,16 +1,26 @@
 ---
-type: inbox
-created: 2026-09-24
-project: praxis
-tags: [praxis, srs, homelab, workout-tracker, architecture]
+title: Software Requirements Specification (SRS) — v1.0.0 Draft (Archived)
+description: Initial Software Requirements Specification draft for Praxis, preserved for historical and comparative reference.
+version: 1.0.0-draft
+status: Superseded / Archive
+date: 2026-09-24
+tags:
+  - requirements
+  - srs
+  - archive
 ---
 
-# Software Requirements Specification (SRS)
-## Project: Praxis — Personal Workout & Habit Tracking Platform
+# Software Requirements Specification (SRS) — v1.0.0 Draft (Archived)
 
-**Version:** 1.0.0-draft  
-**Date:** 2026-09-24  
-**Status:** Draft Baseline  
+> [!WARNING]
+> **Superseded Specification**: This document is an initial draft preserved for historical reference and auditability. The canonical, active specification is maintained in [`praxis-srs-v1.0.2.md`](praxis-srs-v1.0.2.md).
+
+| Document Attribute | Specification |
+| :--- | :--- |
+| **Document Version** | `1.0.0-draft` |
+| **Status** | Superseded / Historical Archive |
+| **Date** | 2026-09-24 |
+| **Canonical Baseline** | [`praxis-srs-v1.0.2.md`](praxis-srs-v1.0.2.md) |
 
 ---
 
