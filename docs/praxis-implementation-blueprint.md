@@ -117,15 +117,43 @@ tests/
 
 ## 2. Dependency Direction
 
+```text
+                 ┌──────────────────┐
+                 │   interfaces/    │  (Phase 4 — FastAPI)
+                 └────────┬─────────┘
+                          │ imports
+                          ▼
+                 ┌──────────────────┐
+                 │   application/   │  use_cases/ + dtos/ + ports/
+                 └────────┬─────────┘
+                          │ imports
+               ┌──────────┴──────────┐
+               ▼                     ▼
+      ┌──────────────┐      ┌──────────────────┐
+      │   domain/    │      │  application/    │
+      │  (pure Python│      │  ports/          │
+      │   stdlib)    │      │  (Protocol stubs)│
+      └──────────────┘      └────────┬─────────┘
+                                     ▲ implements (structurally)
+                                     │
+                            ┌────────┴─────────┐
+                            │  infrastructure/ │
+                            │  adapters/       │
+                            └──────────────────┘
 ```
-tests/unit/domain/          → domain/ only (no mocks, no fakes)
-tests/unit/application/     → application/ + domain/ (in-memory fakes for ports)
-tests/integration/          → infrastructure/ (real DB)
 
-interfaces/fastapi/         → application/use_cases/ (Phase 4)
-application/use_cases/      → domain/ + application/ports/
-domain/                     → stdlib only (dataclasses, enum, uuid, datetime, decimal)
-infrastructure/adapters/    → application/ports/ (implements them)
+The critical relationship: **both** `application/` and `infrastructure/` depend on `application/ports/`. `infrastructure/` never depends on `application/use_cases/`, and `application/` never depends on `infrastructure/`. The protocol is satisfied structurally — no base class import required.
+
+**In import terms:**
+
+```text
+interfaces/fastapi/       → application/use_cases/
+application/use_cases/    → domain/  +  application/ports/
+domain/                   → stdlib only (dataclasses, enum, uuid, datetime, decimal)
+infrastructure/adapters/  → application/ports/  (satisfies Protocol structurally)
+tests/unit/domain/        → domain/ only  (no mocks, no fakes)
+tests/unit/application/   → application/  +  domain/  (in-memory port fakes)
+tests/integration/        → infrastructure/  (real DB — Phase 3)
 ```
 
 **Absolute prohibition**: `domain/` must not import from `application/`, `infrastructure/`, or any third-party library.
@@ -290,7 +318,9 @@ Domain factories and aggregate methods that need the current time receive `now: 
 
 ## 8. Aggregate Construction
 
-Aggregate roots are constructed via **factory classmethods**, not bare `__init__` calls, to make intent explicit and enforce invariants at construction:
+The **public construction API** for aggregate roots is a `create()` classmethod. It carries the invariant checks and ID generation that must happen at construction time. The underlying dataclass `__init__` remains available as the implementation mechanism — `create()` calls it via `cls(...)`.
+
+This distinction matters: do not fight Python's generated `__init__` or mark it private. It is used internally by `create()` and will also be needed by infrastructure adapters when rehydrating persisted aggregates from storage (where invariants were already satisfied on the way in).
 
 ```python
 @classmethod
@@ -303,6 +333,8 @@ def create(
 ) -> "Routine":
     if not name.strip():
         raise ValueError("Routine name must not be blank")
+    if not phases:
+        raise ValueError("Routine must have at least one Phase")
     return cls(
         id=RoutineId.generate(),
         owner_id=owner_id,
